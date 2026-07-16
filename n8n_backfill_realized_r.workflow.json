@@ -1,0 +1,93 @@
+{
+  "name": "W2B — Backfill realized_r (one-shot)",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "a1111111-1111-4111-8111-111111111111",
+      "name": "▶ Run once (manual)",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [-640, 300]
+    },
+    {
+      "parameters": {
+        "documentId": {
+          "__rl": true,
+          "value": "1vxnShmRwFFoAP7j8s6lBGXEZ4930Xneg22kkyZA8Ono",
+          "mode": "list",
+          "cachedResultName": "gold360_google_sheets",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1vxnShmRwFFoAP7j8s6lBGXEZ4930Xneg22kkyZA8Ono/edit?usp=drivesdk"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": 1405257124,
+          "mode": "list",
+          "cachedResultName": "ANALYSES",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1vxnShmRwFFoAP7j8s6lBGXEZ4930Xneg22kkyZA8Ono/edit#gid=1405257124"
+        },
+        "options": {}
+      },
+      "id": "a2222222-2222-4222-8222-222222222222",
+      "name": "📋 Read ANALYSES",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [-440, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// ================================================================\n// W2B — BACKFILL realized_r (one-shot)\n// Recalcule realized_r pour les trades CLÔTURÉS qui n'en ont pas,\n// selon la convention W2A_V3.0_PARTIAL. N'émet QUE les lignes à corriger.\n//\n// Convention : R = |entry - stop_loss|\n//   stopped_out         -> -1.0\n//   invalidated         ->  0\n//   expired_no_entry    ->  0\n//   tp1_hit             -> +0.5 * TP1_R\n//   tp2_hit             -> +0.5 * TP1_R + 0.5 * TP2_R\n//   tp1_hit_expired / expired_after_entry -> exit price inconnu -> SKIP\n// ================================================================\n\nfunction num(v) {\n  if (v === null || v === undefined || v === '') return null;\n  const n = Number(String(v).replace(',', '.').trim());\n  return isNaN(n) ? null : n;\n}\n\nfunction computeR(outcome, entry, sl, tp1, tp2) {\n  if (entry === null || sl === null) return null;\n  const risk = Math.abs(entry - sl);\n  if (risk === 0) return null;\n  const tp1R = tp1 !== null ? Math.abs(tp1 - entry) / risk : 0;\n  const tp2R = tp2 !== null ? Math.abs(tp2 - entry) / risk : 0;\n  switch (outcome) {\n    case 'stopped_out':      return -1.0;\n    case 'invalidated':      return 0;\n    case 'expired_no_entry': return 0;\n    case 'tp1_hit':          return 0.5 * tp1R;\n    case 'tp2_hit':          return 0.5 * tp1R + 0.5 * tp2R;\n    default:                 return null; // tp1_hit_expired / expired_after_entry / pending\n  }\n}\n\nconst out = [];\nlet total = 0, sumR = 0, skipped = 0;\n\nfor (const item of $input.all()) {\n  const r = item.json;\n  if (!r.signal_id) continue;\n  if (String(r.trade_status).trim() !== 'closed') continue;\n  if (r.realized_r !== undefined && String(r.realized_r).trim() !== '') continue; // déjà rempli\n\n  const val = computeR(\n    String(r.outcome || '').trim(),\n    num(r.entry), num(r.stop_loss), num(r.tp1), num(r.tp2)\n  );\n  if (val === null) { skipped++; continue; }\n\n  total++; sumR += val;\n  out.push({ json: { signal_id: r.signal_id, realized_r: +val.toFixed(3) } });\n}\n\nif (out.length === 0) {\n  return [{ json: { info: 'Rien à backfiller', backfilled: 0, skipped } }];\n}\n\n// ligne de contrôle en tête (n'est PAS écrite car sans signal_id -> filtrée en aval si besoin)\nconsole.log(`[BACKFILL] ${total} lignes, bilan ${sumR.toFixed(2)} R, ${skipped} non décidables`);\nreturn out;\n"
+      },
+      "id": "a3333333-3333-4333-8333-333333333333",
+      "name": "⚙️ Compute realized_r",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [-240, 300]
+    },
+    {
+      "parameters": {
+        "operation": "update",
+        "documentId": {
+          "__rl": true,
+          "value": "1vxnShmRwFFoAP7j8s6lBGXEZ4930Xneg22kkyZA8Ono",
+          "mode": "list",
+          "cachedResultName": "gold360_google_sheets",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1vxnShmRwFFoAP7j8s6lBGXEZ4930Xneg22kkyZA8Ono/edit?usp=drivesdk"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": 1405257124,
+          "mode": "list",
+          "cachedResultName": "ANALYSES",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1vxnShmRwFFoAP7j8s6lBGXEZ4930Xneg22kkyZA8Ono/edit#gid=1405257124"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "signal_id": "={{ $json.signal_id }}",
+            "realized_r": "={{ $json.realized_r }}"
+          },
+          "matchingColumns": ["signal_id"],
+          "schema": [
+            { "id": "signal_id", "displayName": "signal_id", "required": false, "defaultMatch": false, "display": true, "type": "string", "canBeUsedToMatch": true },
+            { "id": "realized_r", "displayName": "realized_r", "required": false, "defaultMatch": false, "display": true, "type": "string", "canBeUsedToMatch": true }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": true
+        },
+        "options": {}
+      },
+      "id": "a4444444-4444-4444-8444-444444444444",
+      "name": "📋 Update realized_r",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [-40, 300]
+    }
+  ],
+  "connections": {
+    "▶ Run once (manual)": { "main": [[{ "node": "📋 Read ANALYSES", "type": "main", "index": 0 }]] },
+    "📋 Read ANALYSES": { "main": [[{ "node": "⚙️ Compute realized_r", "type": "main", "index": 0 }]] },
+    "⚙️ Compute realized_r": { "main": [[{ "node": "📋 Update realized_r", "type": "main", "index": 0 }]] }
+  },
+  "settings": { "executionOrder": "v1" },
+  "meta": { "templateCredsSetupCompleted": false }
+}
