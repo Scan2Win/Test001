@@ -1,18 +1,25 @@
-# Analyse par session — journal gold360 (XAUUSD)
+# Analyse par session — sheet gold360 (XAUUSD)
 
-Source : onglet `ANALYSES` du sheet `gold360_google_sheets`
+Source : `gold360_google_sheets`
 (`1vxnShmRwFFoAP7j8s6lBGXEZ4930Xneg22kkyZA8Ono`), export du 2026-08-02.
-Script reproductible : `analyze_sessions.py`.
+Le fichier contient **7 onglets** ; deux sont utilisés ici :
 
-**Périmètre** : 5 515 lignes brutes → **834 fenêtres de cron uniques**
-(dédoublonnées par `(date, heure UTC)`, cf. `CORRECTIFS_W1.md`),
-du **2026-04-20 au 2026-07-31**, soit **73 jours de marché**.
+| Onglet | Lignes | Usage dans ce rapport |
+|---|---:|---|
+| `ANALYSES` | 6 311 | §1 — opportunités produites par le système |
+| `GOLD_M5_DATA` | 16 665 | §2 à §4 — comportement réel du marché (OHLC M5) |
+| CALENDAR_NEWS / PERFORMANCE_STATS / W4_RUN_LOG / TUNING_LOG / PARAMETRES_SYSTEME | — | non exploités |
+
+Scripts reproductibles : `analyze_sessions.py` (onglet ANALYSES) et
+`analyze_m5_sessions.py` (onglet GOLD_M5_DATA).
 
 ---
 
-## 1. Volume et qualité des opportunités
+## 1. Opportunités produites par le système (onglet ANALYSES)
 
-| Session | Fenêtres | Pré-filtre passé | Score moyen | TRADE | Taux TRADE |
+834 fenêtres de cron uniques, 2026-04-20 → 2026-07-31, 73 jours.
+
+| Session | Fenêtres | Pré-filtre | Score moyen | TRADE | Taux TRADE |
 |---|---:|---:|---:|---:|---:|
 | Pre-London (06h) | 63 | 28,6 % | 11,7 | 4 | **6,3 %** |
 | London (08–12h) | 324 | 28,7 % | 9,1 | 10 | 3,1 % |
@@ -20,170 +27,184 @@ du **2026-04-20 au 2026-07-31**, soit **73 jours de marché**.
 | New York (15–18h) | 257 | 24,5 % | 9,0 | 12 | 4,7 % |
 | Cloture NY (20h) | 69 | 24,6 % | 7,1 | 2 | 2,9 % |
 
-**Lecture.** En volume brut, London et New York dominent — mais c'est un
-artefact du cron : London a 5 fenêtres par jour, l'Overlap seulement 2. Le
-seul indicateur comparable est le **taux de TRADE par fenêtre**.
+Le volume brut de London/NY est un artefact du cron (5 fenêtres/jour contre 2
+pour l'Overlap). Le seul indicateur comparable est le taux de TRADE par
+fenêtre.
 
-**Le paradoxe de l'Overlap.** C'est la session avec le **meilleur taux de
-pré-filtre (30 %)** et le **meilleur score moyen (12,0)** — et pourtant celle
-qui produit **le moins de trades (2,5 %)**. Elle est aussi, de loin, la plus
-volatile (§2). Le système détecte donc bien la qualité de cette fenêtre, puis
-l'élimine à l'étape suivante.
-
-**Cause probable identifiée dans le code.** Dans `⚙️ Code V4`
-(`getSessionBonus`, l.251 et `getExpiryMinutes`, l.243), les tests en cascade
-utilisent `.includes()` :
+**Le paradoxe de l'Overlap** : meilleur pré-filtre (30 %), meilleur score
+moyen (12,0), session **de loin la plus volatile** (§2) — et pourtant le taux
+de TRADE le plus bas. Cause probable dans `⚙️ Code V4` :
 
 ```js
 if (sessionName.includes('London'))  return P.london_bonus;   // attrape l'Overlap
 if (sessionName.includes('Overlap')) return P.overlap_bonus;  // jamais atteint
 ```
 
-`'Overlap London/NY'.includes('London')` vaut `true` → l'Overlap reçoit
-**+8 au lieu de +10** et un expiry de **180 min au lieu de 120**. Deux points
-de score en moins sur la fenêtre la plus active, juste au niveau du seuil
-d'exécution. À corriger en testant `Overlap` **avant** `London`.
+`'Overlap London/NY'.includes('London')` vaut `true` → l'Overlap reçoit **+8 au
+lieu de +10** et expire à **180 min au lieu de 120**. Deux points de score en
+moins, pile au niveau du seuil, sur la meilleure fenêtre de la journée.
 
-### Performance : données inexploitables
-
-| Session | TRADE | Entrés | TP1 | SL | realized_r |
-|---|---:|---:|---:|---:|---:|
-| Pre-London | 4 | 1 | 1 | 0 | vide |
-| London | 10 | 2 | 2 | 0 | vide |
-| Overlap | 3 | 0 | 0 | 0 | vide |
-| New York | 12 | 4 | 2 | 1 | vide |
-| Cloture NY | 2 | 0 | 0 | 0 | vide |
-
-**31 TRADE en 73 jours (0,42/jour), dont 7 réellement entrés, et `realized_r`
-vide partout.** Aucune conclusion de performance par session n'est possible.
-Il faut d'abord exécuter `n8n_backfill_realized_r.workflow.json`, puis
-attendre plusieurs mois de trades pour que ce tableau ait un sens.
+**Performance : inexploitable.** 31 TRADE en 73 jours, 7 réellement entrés,
+`realized_r` vide partout. Lancer `n8n_backfill_realized_r.workflow.json`
+avant toute conclusion de performance.
 
 ---
 
-## 2. Amplitude réelle par session
+## 2. Ce que fait vraiment le marché (bougies M5, 61 jours complets)
 
-| Session | Durée | Jours | \|move\| moyen | **$/heure** | Médiane | p90 | % haussier | Drift moyen |
-|---|---:|---:|---:|---:|---:|---:|---:|---:|
-| Asie (overnight 20h→06h) | 10 h | 62 | 35,50 $ | **3,55** | 28,99 | 71,59 | **32,3 %** | **−8,70 $** |
-| Londres (08→12h) | 4 h | 61 | 16,14 $ | 4,03 | 9,77 | 38,80 | 55,7 % | −0,80 $ |
-| Overlap (12→14h) | 2 h | 57 | 20,03 $ | **10,02** | 15,92 | 42,41 | 49,1 % | +2,05 $ |
-| New York (14→18h) | 4 h | 55 | 20,93 $ | 5,23 | 15,78 | 41,62 | 47,3 % | −3,37 $ |
-| Cloture NY (18→20h) | 2 h | 64 | 9,91 $ | 4,96 | 8,04 | 17,84 | 40,6 % | −3,01 $ |
-| Journée complète | 24 h | 67 | 51,99 $ | 2,17 | 47,19 | 98,17 | 47,8 % | −10,65 $ |
+2026-05-04 → 2026-07-31. Fenêtres : Asie 00–08h, Londres 08–13h,
+Overlap 13–15h, New York 15–21h UTC.
 
-Deux résultats nets :
+| Session | Durée | Range moyen | **$/heure** | Volume/h | \|move\| | **move/range** |
+|---|---:|---:|---:|---:|---:|---:|
+| Asie | 8 h | 55,48 $ | 6,94 | 17 372 | 28,97 | 49 % |
+| Londres | 5 h | 40,35 $ | 8,07 | 15 077 | 21,44 | 50 % |
+| **Overlap** | 2 h | 42,84 $ | **21,42** | **25 699** | 19,03 | 40 % |
+| New York | 6 h | 42,89 $ | 7,15 | 15 439 | 23,29 | 47 % |
+| Journée | 21 h | 99,88 $ | 4,76 | 17 792 | 51,52 | 48 % |
 
-1. **L'Overlap 12h–14h est 3× plus volatile que l'Asie à l'heure**
-   (10,02 $/h contre 3,55 $/h). L'Asie paraît grosse en valeur absolue
-   (35,50 $) uniquement parce que sa fenêtre dure 10 heures. C'est en réalité
-   **la session la moins active par unité de temps**.
-2. **L'Asie a un biais baissier marqué sur la période** : seulement 32,3 % de
-   nuits haussières, −8,70 $ par nuit en moyenne, **−539 $ cumulés**. Sur une
-   période où l'or perd 714 $ au total, l'essentiel de la baisse se fait la
-   nuit — ce qui est un biais de régime, pas une loi du marché.
+`move/range` = efficacité directionnelle (distance parcourue / amplitude
+balayée). Toutes les sessions sont autour de 40–50 % : **aucune session ne
+« tend » nettement plus que les autres**. L'Overlap est la moins efficace
+(40 %) tout en étant la plus rapide : beaucoup de mouvement, peu de direction.
+
+**L'Overlap concentre 3× la volatilité horaire de l'Asie** (21,42 $/h contre
+6,94 $/h) et 1,5× le volume. L'Asie paraît grosse en absolu (55 $ de range)
+uniquement parce qu'elle dure 8 heures.
+
+### Qui borne la journée ?
+
+| Session | Fait le HAUT | Fait le BAS | Un extrême | **Par heure** |
+|---|---:|---:|---:|---:|
+| **Asie** | **50,8 %** | **50,8 %** | **50,8 %** | 6,4 % |
+| Londres | 6,6 % | 1,6 % | **4,1 %** | **0,8 %** |
+| Overlap | 19,7 % | 26,2 % | 23,0 % | **11,5 %** |
+| New York | 23,0 % | 21,3 % | 22,1 % | 3,7 % |
+
+**Un jour sur deux, le plus haut ET le plus bas de la journée sont posés
+pendant la nuit asiatique.** Londres, elle, ne pose pratiquement jamais
+d'extrême (4,1 %, soit 0,8 %/heure — vingt fois moins que l'Overlap) : la
+séance de Londres se déroule **à l'intérieur des bornes déjà fixées**.
+
+C'est le seul point du modèle qui ressort nettement des données : **l'Asie
+cadre la journée.**
 
 ---
 
-## 3. Quelle session donne le « vrai sens » ?
+## 3. Test frontal du modèle
 
-### Le test à ne pas faire
+> *« L'Asie (00h–07h) donne le vrai sens, Londres corrige, l'Amérique repart
+> dans le vrai sens. »*
 
-Comparer chaque session au mouvement de la **journée entière** donne :
-Asie 74,6 %, Londres 76,3 %, Overlap 62,3 %, NY 61,5 %. Ces chiffres sont
-**mécaniquement faux** : la journée contient la session testée, et l'Asie pèse
-58 % du mouvement absolu total. Une session corrélée à elle-même à 75 %,
-ça ne prouve rien.
+### Londres balaie-t-elle le range asiatique ?
 
-### Le test correct : la session annonce-t-elle *la suite* de la journée ?
+| Londres casse… | Jours | % |
+|---|---:|---:|
+| le haut d'Asie seulement | 17 | 27,9 % |
+| le bas d'Asie seulement | 24 | 39,3 % |
+| les deux | 1 | 1,6 % |
+| aucun (reste dans le range) | 19 | 31,1 % |
 
-Sens de la session comparé au sens du mouvement entre **sa fin** et 20h UTC —
-deux fenêtres disjointes, donc pas de circularité.
+**Oui : 69 % des jours, Londres sort du range asiatique.** Mais sortir n'est
+pas manipuler. La question est ce qui se passe ensuite.
 
-| Session | n jours | Continuation | p-value | Verdict |
+| Après un balayage unilatéral | Résultat | Taux de base | p |
+|---|---:|---:|---:|
+| Casse le HAUT d'Asie → clôture baissière | 7/17 = 41,2 % | 57 % | 0,221 |
+| Casse le BAS d'Asie → clôture haussière | 6/24 = **25,0 %** | 43 % | 0,099 |
+
+Le taux de base compte : sur la période, le marché clôture au-dessus de la
+clôture asiatique dans seulement 42,6 % des cas (marché baissier). Corrigé de
+ce biais, **le balayage n'est suivi d'aucun retournement — le mouvement
+continue.** Après une cassure du bas asiatique, la journée finit encore plus
+bas 3 fois sur 4. C'est une rupture de range, pas un piège à liquidité.
+
+### Les trois affirmations, testées
+
+| Affirmation | Mesure | Référence | p | Verdict |
 |---|---:|---:|---:|---|
-| Asie (overnight) | 59 | 55,9 % | 0,435 | non significatif |
-| Londres | 59 | 55,9 % | 0,435 | non significatif |
-| **Overlap** | 54 | **29,6 %** | **0,004** | **significatif — inversé** |
-| New York | 50 | 46,0 % | 0,672 | non significatif |
+| Londres à contre-sens de l'Asie | 28/61 = 45,9 % | 50 % | 0,609 | ❌ non |
+| New York dans le sens de l'Asie | 28/61 = 45,9 % | 50 % | 0,609 | ❌ non |
+| Séquence complète | 14/61 = 23,0 % | 25 % | 0,770 | ❌ non |
+| *Clôture du jour dans le sens de l'Asie* | *36/61 = 59,0 %* | *50 %* | *0,200* | ⚠️ tendance, non prouvé |
 
-Un seul signal ressort : **ce que fait le marché entre 12h et 14h est défait
-dans 70 % des cas entre 14h et la clôture**. La matrice d'accord entre
-sessions confirme : Overlap ↔ New York est la case la plus basse du tableau
-(**32,1 %** de jours dans le même sens).
+### Quelle session lance la suite de la journée ?
 
-### Test direct de ton hypothèse
+Sens de la session comparé au mouvement entre **sa fin** et la clôture —
+fenêtres disjointes, pas de circularité.
 
-> *« L'Asie (00h–07h) donne le vrai sens, Londres corrige, l'Amérique reprend
-> le vrai sens. »*
+| Session | Continuation | p |
+|---|---:|---:|
+| **Asie** | **59,0 %** | 0,200 |
+| Londres | 45,9 % | 0,609 |
+| Overlap | 42,6 % | 0,306 |
 
-| Test | Tous les jours (n=44) | Hors lundi (n=34) | Attendu au hasard |
-|---|---:|---:|---:|
-| Londres à contre-sens de l'Asie | 45,5 % (p=0,65) | 55,9 % (p=0,61) | 50 % |
-| New York dans le sens de l'Asie | 50,0 % (p=1,00) | 44,1 % (p=0,61) | 50 % |
-| Séquence complète | 20,5 % | 23,5 % | 25 % |
-
-**L'hypothèse n'est pas vérifiée sur ces données.** Les trois tests sont à la
-hauteur du hasard, et la séquence complète tombe même *sous* les 25 % attendus
-d'un tirage aléatoire. Aucune p-value n'approche le seuil de significativité.
-
-Ce que dit la donnée à la place : **Londres et l'Overlap poussent ensemble
-(63,5 % d'accord — la case la plus haute), et New York défait ce mouvement.**
-C'est une phase différente de celle de ton modèle : le point de retournement
-est à 14h, pas à l'ouverture de Londres.
-
-### Nuance importante sur ce signal
-
-| Après un Overlap… | n | Move 14h→20h moyen | Médiane |
-|---|---:|---:|---:|
-| **haussier** | 26 | **−15,52 $** | −14,32 $ |
-| baissier | 28 | −0,08 $ | +5,16 $ |
-
-Le « retournement » n'est pas symétrique : **seules les hausses de 12h–14h
-sont vendues** ; les baisses ne rebondissent quasiment pas. Et sur une période
-où le drift général est de −10,65 $/jour, une partie de cet effet n'est que le
-biais baissier du marché.
-
-Stabilité mois par mois : avril 5/8, mai 11/13, **juin 7/15**, juillet 15/18.
-Juin casse complètement le pattern. **Ce n'est pas un edge validé, c'est une
-piste à backtester** sur données OHLC réelles.
+**Bilan.** Ton modèle se vérifie sur **un point sur trois** :
+l'Asie cadre la journée (elle pose la moitié des extrêmes) et c'est la seule
+session dont le sens penche du bon côté pour la suite (59 %) — mais avec
+n=61 jours, 59 % n'est pas distinguable du hasard (il faudrait ~63 % pour
+atteindre le seuil). Les deux autres affirmations — Londres corrige, New York
+reprend — sont contredites : Londres ne corrige pas, elle prolonge autant
+qu'elle inverse, et New York part dans le sens de l'Asie moins d'une fois sur
+deux.
 
 ---
 
-## 4. Limites de cette analyse
+## 4. Régime de la période (contrôle)
 
-1. **Pas de données OHLC.** Le journal ne contient que `current_price` aux
-   heures de cron (06, 08→18, 20 UTC). On mesure des mouvements point-à-point,
-   sans high/low. **C'est la limite bloquante** : ton modèle Asie/Londres/NY
-   est un modèle de *liquidité* (Londres balaie le range asiatique, puis NY
-   repart), et un balayage de range ne se voit pas dans un écart de clôture à
-   clôture. Le test ci-dessus rejette une version *appauvrie* de ton
-   hypothèse, pas l'hypothèse elle-même.
-2. **La session asiatique n'est jamais loggée** (cron à 06h seulement). Elle
-   est approximée par 20h(J−1) → 06h(J), ce qui inclut 4 h de post-clôture US
-   et, le lundi, tout le gap du week-end.
-3. **Échantillon court** : 73 jours, 34 à 62 jours exploitables par test. À
-   cette taille, tout écart inférieur à ~13 points de pourcentage est du bruit.
-4. **Un seul actif, un seul régime** : XAUUSD en drift baissier d'avril à
-   juillet 2026. Les biais mesurés sont peut-être ceux de la période, pas ceux
-   des sessions.
-5. **Le prix vient d'un snapshot au moment du cron**, pas d'une bougie fermée.
-   Un point aberrant à 14h dégrade à la fois le move Overlap et le move
-   suivant, dans des sens opposés.
+| Session | Jours haussiers | Drift moyen | Cumul |
+|---|---:|---:|---:|
+| Asie | 41,0 % | −4,96 $ | −302 $ |
+| Londres | 50,8 % | −0,80 $ | −49 $ |
+| Overlap | 42,6 % | −1,43 $ | −87 $ |
+| New York | 45,9 % | −4,69 $ | −286 $ |
+| **Journée** | **42,6 %** | **−11,12 $** | **−678 $** |
+
+L'or baisse de 678 $ sur la période, et **la baisse se fait surtout la nuit et
+en séance US**. Tous les taux ci-dessus héritent de ce biais : les résultats
+sont ceux d'un marché baissier de mai à juillet 2026, pas des lois générales
+des sessions.
 
 ---
 
-## 5. Ce que je recommande
+## 5. Corrections d'une version précédente de ce rapport
+
+Une première passe n'utilisait que l'onglet `ANALYSES` (un prix ponctuel par
+heure de cron, sans mèches). Deux conclusions en sont sorties fausses :
+
+1. **« Pas de données OHLC disponibles »** — faux. L'onglet `GOLD_M5_DATA`
+   contient 16 665 bougies M5 complètes. L'export CSV de Google Drive ne
+   renvoie que le premier onglet, d'où l'erreur.
+2. **« Le mouvement 12h–14h est inversé après 14h dans 70 % des cas
+   (p=0,004) »** — artefact. Ce test partageait le prix de 14h entre les deux
+   fenêtres mesurées, ce qui crée une corrélation négative artificielle. Sur
+   les vraies bougies, la continuation après l'Overlap est de **42,6 %
+   (p=0,306)** : rien de significatif.
+
+---
+
+## 6. Limites
+
+1. **61 jours complets.** À cette taille, il faut dépasser ~63 % pour qu'un
+   taux se distingue du hasard. Tout ce qui est entre 40 % et 60 % ici est du
+   bruit.
+2. **Un seul actif, un seul régime** (XAUUSD baissier, mai–juillet 2026).
+3. **Les bougies M5 démarrent le 04/05**, l'onglet ANALYSES le 20/04 : les
+   deux volets ne couvrent pas exactement la même période.
+4. **Le modèle testé est simplifié.** « Balayage » = dépassement du plus haut
+   ou du plus bas asiatique. Un vrai test de liquidité regarderait aussi la
+   vitesse du rejet, le retour dans le range et le volume au balayage.
+5. **Aucun coût de transaction** n'est pris en compte : le spread moyen est
+   dans les données mais n'entre dans aucun calcul.
+
+---
+
+## 7. Recommandations
 
 | # | Action | Pourquoi | Priorité |
 |---|---|---|---|
-| 1 | **Backfill H1 OHLC** dans un onglet dédié (les nœuds `MetaAPI — H1` récupèrent déjà les bougies, il suffit de les logger) | Sans high/low, on ne peut ni mesurer un range asiatique, ni détecter un balayage — donc pas tester ton modèle | 🔴 |
-| 2 | **Corriger le bug Overlap** (`Overlap` testé avant `London` dans les deux fonctions) | Débride la fenêtre la plus volatile du marché (10 $/h), aujourd'hui pénalisée de 2 pts de score | 🔴 |
+| 1 | **Faire tourner W1 pendant l'Asie** (crons 02h et 04h UTC) | L'Asie pose 51 % des extrêmes de la journée et c'est la seule session au tilt directionnel positif — le système ne l'analyse jamais (premier cron à 06h) | 🔴 |
+| 2 | **Corriger le bug Overlap** (tester `Overlap` avant `London`) | Débride la fenêtre à 21 $/h et 26 k de volume horaire, aujourd'hui pénalisée de 2 points | 🔴 |
 | 3 | **Exécuter le backfill `realized_r`** | Sans lui, aucune performance par session n'est mesurable | 🟠 |
-| 4 | **Ajouter un cron à 02h et 04h UTC** | Fait entrer la session asiatique dans le journal au lieu de l'approximer | 🟠 |
-| 5 | Re-tester le fade de l'Overlap après 14h sur 12 mois d'OHLC | Seul signal statistiquement significatif trouvé, mais instable (juin le casse) | 🟡 |
-
-Une fois (1) et (4) en place, le vrai test de ton modèle devient possible :
-mesurer le range asiatique 00h–07h, vérifier si Londres en balaie le haut ou
-le bas, et si New York clôture du côté annoncé par l'Asie. C'est cette
-version-là qu'il faut trancher — pas celle des clôtures horaires.
+| 4 | **Logger le range asiatique** (`asia_high`, `asia_low`) dans ANALYSES | Permet de relier chaque signal à sa position dans le range de la nuit, et de tester le modèle sur les signaux réels et non plus sur le prix seul | 🟠 |
+| 5 | **Rejouer ces tests sur 12 mois** dès que `GOLD_M5_DATA` couvre une année | 61 jours ne suffisent pas à valider un tilt de 59 % | 🟡 |
